@@ -48,10 +48,6 @@ static struct segdesc gdt[] = {
     [SEG_TSS]    = SEG_NULL,
 };
 
-static struct pseudodesc gdt_pd = {
-    sizeof(gdt) - 1, (uint32_t)gdt
-};
-
 /* *
  * lgdt - load the global descriptor table register and reset the
  * data/code segement registers for kernel.
@@ -83,6 +79,11 @@ gdt_init(void) {
     // initialize the TSS filed of the gdt
     gdt[SEG_TSS] = SEG16(STS_T32A, (uint32_t)&ts, sizeof(ts), DPL_KERNEL);
     gdt[SEG_TSS].sd_s = 0;
+
+    struct pseudodesc gdt_pd = {
+      .pd_lim = sizeof(gdt) - 1,
+      .pd_base = (uint32_t)gdt
+    };
 
     // reload all segment registers
     lgdt(&gdt_pd);

@@ -219,13 +219,13 @@ debuginfo_eip(uintptr_t addr, struct eipdebuginfo *info) {
  * */
 void
 print_kerninfo(void) {
-    extern char etext[], edata[], end[], kern_init[];
+    extern char etext[], edata[], ucore_end[], kern_init[];
     cprintf("Special kernel symbols:\n");
     cprintf("  entry  0x%08x (phys)\n", kern_init);
     cprintf("  etext  0x%08x (phys)\n", etext);
     cprintf("  edata  0x%08x (phys)\n", edata);
-    cprintf("  end    0x%08x (phys)\n", end);
-    cprintf("Kernel executable memory footprint: %dKB\n", (end - kern_init + 1023)/1024);
+    cprintf("  end    0x%08x (phys)\n", ucore_end);
+    cprintf("Kernel executable memory footprint: %dKB\n", (ucore_end - kern_init + 1023)/1024);
 }
 
 /* *

@@ -209,10 +209,10 @@ page_init(void) {
         maxpa = KMEMSIZE;
     }
 
-    extern char end[]; // bootloader加载ucore的结束地址
+    extern char ucore_end[]; // bootloader加载ucore的结束地址
 
     npage = maxpa / PGSIZE;
-    pages = (struct Page *)ROUNDUP((void *)end, PGSIZE);
+    pages = (struct Page *)ROUNDUP((void *)ucore_end, PGSIZE);
 
     for (i = 0; i < npage; i ++) {
         SetPageReserved(pages + i);
@@ -225,6 +225,9 @@ page_init(void) {
     //                      : 0xc01bbd80
     // `p npage`            : 32736
     uintptr_t freemem = PADDR((uintptr_t)pages + sizeof(struct Page) * npage);
+    /*static_assert(freemem == 0x1bbd80);*/
+    /*uintptr_t freemem = PADDR(0xc01bbd80);*/
+    /*uintptr_t freemem = 0x1bbd80;*/
 
     for (i = 0; i < memmap->nr_map; i ++) {
         uint64_t begin = memmap->map[i].addr, end = begin + memmap->map[i].size;

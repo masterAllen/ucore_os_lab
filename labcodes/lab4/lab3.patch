@@ -1,0 +1,764 @@
+diff -r -u -P lab3/kern/debug/kdebug.c lab3_master/kern/debug/kdebug.c
+--- lab3/kern/debug/kdebug.c	2018-10-16 09:47:34.448901101 +0800
++++ lab3_master/kern/debug/kdebug.c	2018-10-16 09:47:17.407581214 +0800
+@@ -219,13 +219,13 @@
+  * */
+ void
+ print_kerninfo(void) {
+-    extern char etext[], edata[], end[], kern_init[];
++    extern char etext[], edata[], ucore_end[], kern_init[];
+     cprintf("Special kernel symbols:\n");
+     cprintf("  entry  0x%08x (phys)\n", kern_init);
+     cprintf("  etext  0x%08x (phys)\n", etext);
+     cprintf("  edata  0x%08x (phys)\n", edata);
+-    cprintf("  end    0x%08x (phys)\n", end);
+-    cprintf("Kernel executable memory footprint: %dKB\n", (end - kern_init + 1023)/1024);
++    cprintf("  end    0x%08x (phys)\n", ucore_end);
++    cprintf("Kernel executable memory footprint: %dKB\n", (ucore_end - kern_init + 1023)/1024);
+ }
+ 
+ /* *
+@@ -293,6 +293,20 @@
+  * */
+ void
+ print_stackframe(void) {
++     uint32_t ebp = read_ebp(), eip = read_eip();
++
++     int i, j;
++     for (i = 0; ebp != 0 && i < STACKFRAME_DEPTH; i ++) {
++         cprintf("ebp:0x%08x eip:0x%08x args:", ebp, eip);
++         uint32_t *args = (uint32_t *)ebp + 2;
++         for (j = 0; j < 4; j ++) {
++             cprintf("0x%08x ", args[j]);
++         }
++         cprintf("\n");
++         print_debuginfo(eip - 1);
++         eip = ((uint32_t *)ebp)[1];
++         ebp = ((uint32_t *)ebp)[0];
++     }
+      /* LAB1 YOUR CODE : STEP 1 */
+      /* (1) call read_ebp() to get the value of ebp. the type is (uint32_t);
+       * (2) call read_eip() to get the value of eip. the type is (uint32_t);
+diff -r -u -P lab3/kern/init/init.c lab3_master/kern/init/init.c
+--- lab3/kern/init/init.c	2018-10-16 09:47:34.448901101 +0800
++++ lab3_master/kern/init/init.c	2018-10-16 09:47:17.411581272 +0800
+@@ -19,8 +19,8 @@
+ 
+ int
+ kern_init(void) {
+-    extern char edata[], end[];
+-    memset(edata, 0, end - edata);
++    extern char edata[], ucore_end[];
++    memset(edata, 0, ucore_end - edata);
+ 
+     cons_init();                // init the console
+ 
+@@ -92,12 +92,22 @@
+ 
+ static void
+ lab1_switch_to_user(void) {
+-    //LAB1 CHALLENGE 1 : TODO
++    asm volatile (
++        "sub $0x8, %%esp \n"
++        "int %0 \n"
++        "movl %%ebp, %%esp"
++        : : "i"(T_SWITCH_TOU)
++    );
+ }
+ 
+ static void
+ lab1_switch_to_kernel(void) {
+-    //LAB1 CHALLENGE 1 :  TODO
++    asm volatile (
++        "int %0 \n"
++        "movl %%ebp, %%esp \n"
++        : 
++        : "i"(T_SWITCH_TOK)
++    );
+ }
+ 
+ static void
+diff -r -u -P lab3/kern/mm/default_pmm.c lab3_master/kern/mm/default_pmm.c
+--- lab3/kern/mm/default_pmm.c	2018-10-16 09:47:34.448901101 +0800
++++ lab3_master/kern/mm/default_pmm.c	2018-10-16 09:47:17.415581330 +0800
+@@ -119,6 +119,9 @@
+     list_add(&free_list, &(base->page_link));
+ }
+ 
++// XXX: This implememtation is only for boot time kernel before enabling paging.
++// It doesn't check if the allocated pages are reserved.
++// Is this right ?
+ static struct Page *
+ default_alloc_pages(size_t n) {
+     assert(n > 0);
+@@ -135,12 +138,13 @@
+         }
+     }
+     if (page != NULL) {
+-        list_del(&(page->page_link));
+         if (page->property > n) {
+             struct Page *p = page + n;
+             p->property = page->property - n;
+-            list_add(&free_list, &(p->page_link));
+-    }
++            SetPageProperty(p);
++            list_add_after(&(page->page_link), &(p->page_link));
++        }
++        list_del(&(page->page_link));
+         nr_free -= n;
+         ClearPageProperty(page);
+     }
+@@ -162,12 +166,12 @@
+     while (le != &free_list) {
+         p = le2page(le, page_link);
+         le = list_next(le);
+-        if (base + base->property == p) {
++        if (base + base->property == p) { // delete the block after `base`
+             base->property += p->property;
+             ClearPageProperty(p);
+             list_del(&(p->page_link));
+         }
+-        else if (p + p->property == base) {
++        else if (p + p->property == base) { // delete the block before `base`
+             p->property += base->property;
+             ClearPageProperty(base);
+             base = p;
+@@ -175,7 +179,14 @@
+         }
+     }
+     nr_free += n;
+-    list_add(&free_list, &(base->page_link));
++    for (le = list_next(&free_list); le != &free_list; le = list_next(le)) {
++      p = le2page(le, page_link);
++      if (base + base->property <= p) { // find the next block of `base`
++        assert(base + base->property != p); // There should be some block in use between `p` and `base`
++        break;
++      }
++    }
++    list_add_before(le, &(base->page_link));
+ }
+ 
+ static size_t
+diff -r -u -P lab3/kern/mm/pmm.c lab3_master/kern/mm/pmm.c
+--- lab3/kern/mm/pmm.c	2018-10-16 09:47:34.448901101 +0800
++++ lab3_master/kern/mm/pmm.c	2018-10-16 09:47:17.411581272 +0800
+@@ -85,10 +85,6 @@
+     [SEG_TSS]   = SEG_NULL,
+ };
+ 
+-static struct pseudodesc gdt_pd = {
+-    sizeof(gdt) - 1, (uintptr_t)gdt
+-};
+-
+ static void check_alloc_page(void);
+ static void check_pgdir(void);
+ static void check_boot_pgdir(void);
+@@ -129,6 +125,11 @@
+     // initialize the TSS filed of the gdt
+     gdt[SEG_TSS] = SEGTSS(STS_T32A, (uintptr_t)&ts, sizeof(ts), DPL_KERNEL);
+ 
++    struct pseudodesc gdt_pd = {
++        .pd_lim = sizeof(gdt) - 1,
++        .pd_base = (uintptr_t)gdt
++    };
++
+     // reload all segment registers
+     lgdt(&gdt_pd);
+ 
+@@ -221,16 +222,25 @@
+         maxpa = KMEMSIZE;
+     }
+ 
+-    extern char end[];
++    extern char ucore_end[]; // bootloader加载ucore的结束地址
+ 
+     npage = maxpa / PGSIZE;
+-    pages = (struct Page *)ROUNDUP((void *)end, PGSIZE);
++    pages = (struct Page *)ROUNDUP((void *)ucore_end, PGSIZE);
+ 
+     for (i = 0; i < npage; i ++) {
+         SetPageReserved(pages + i);
+     }
+ 
++    // XXX: Why is `freemem` < `pages` when break at the next line (for loop) ?
++    // `p/x freemem` in gdb : 0xc0008000
++    // `p/x pages`          : 0xc011c000
++    // `p/x (uintptr_t)pages + sizeof(struct Page) * npage`
++    //                      : 0xc01bbd80
++    // `p npage`            : 32736
+     uintptr_t freemem = PADDR((uintptr_t)pages + sizeof(struct Page) * npage);
++    /*static_assert(freemem == 0x1bbd80);*/
++    /*uintptr_t freemem = PADDR(0xc01bbd80);*/
++    /*uintptr_t freemem = 0x1bbd80;*/
+ 
+     for (i = 0; i < memmap->nr_map; i ++) {
+         uint64_t begin = memmap->map[i].addr, end = begin + memmap->map[i].size;
+@@ -310,6 +320,7 @@
+ 
+     // recursively insert boot_pgdir in itself
+     // to form a virtual page table at virtual address VPT
++    // In this lab, recursive page directory is used only for `print_pgdir()`
+     boot_pgdir[PDX(VPT)] = PADDR(boot_pgdir) | PTE_P | PTE_W;
+ 
+     // map all physical memory to linear memory with base linear addr KERNBASE
+@@ -372,6 +383,19 @@
+     }
+     return NULL;          // (8) return page table entry
+ #endif
++    pde_t *pdep = &pgdir[PDX(la)];
++    if (!(*pdep & PTE_P)) {
++      struct Page* page;
++      if (!create || (page = alloc_page()) == NULL) {
++        return NULL;
++      }
++      set_page_ref(page, 1);
++      uintptr_t pa = page2pa(page); // physical address of secondary page table
++      memset(KADDR(pa), 0, PGSIZE); // MUST memset to 0 because every entry here
++                                    // is a new PTE mapping to nothing.
++      *pdep = pa | PTE_P | PTE_W | PTE_U;
++    }
++    return &((pte_t*) KADDR(PDE_ADDR(*pdep)))[PTX(la)];
+ }
+ 
+ //get_page - get related Page struct for linear address la using PDT pgdir
+@@ -417,6 +441,19 @@
+                                   //(6) flush tlb
+     }
+ #endif
++    if (*ptep & PTE_P) {
++      struct Page* page = pte2page(*ptep);
++      page_ref_dec(page);
++      if (page->ref == 0) {
++        free_page(page);
++        // must NOT invalidate TLB only here. If one process free page, it
++        // should not see it any more. Since `*ptep` is cleared, TLB must
++        // refresh.
++      }
++      tlb_invalidate(pgdir, la);
++      *ptep = 0;
++      // *ptep &= ~PTE_P;
++    }
+ }
+ 
+ //page_remove - free an Page which is related linear address la and has an validated pte
+diff -r -u -P lab3/kern/mm/swap.c lab3_master/kern/mm/swap.c
+--- lab3/kern/mm/swap.c	2018-10-16 09:47:34.448901101 +0800
++++ lab3_master/kern/mm/swap.c	2018-10-16 09:47:17.411581272 +0800
+@@ -107,6 +107,7 @@
+           }
+           else {
+                     cprintf("swap_out: i %d, store page in vaddr 0x%x to disk swap entry %d\n", i, v, page->pra_vaddr/PGSIZE+1);
++                    cprintf("page physical address: %d\n", page2pte(page));
+                     *ptep = (page->pra_vaddr/PGSIZE+1)<<8;
+                     free_page(page);
+           }
+diff -r -u -P lab3/kern/mm/swap_fifo.c lab3_master/kern/mm/swap_fifo.c
+--- lab3/kern/mm/swap_fifo.c	2018-10-16 09:47:34.448901101 +0800
++++ lab3_master/kern/mm/swap_fifo.c	2018-10-16 09:47:17.411581272 +0800
+@@ -51,6 +51,7 @@
+     //record the page access situlation
+     /*LAB3 EXERCISE 2: YOUR CODE*/ 
+     //(1)link the most recent arrival page at the back of the pra_list_head qeueue.
++    list_add(head, entry);
+     return 0;
+ }
+ /*
+@@ -67,6 +68,12 @@
+      /*LAB3 EXERCISE 2: YOUR CODE*/ 
+      //(1)  unlink the  earliest arrival page in front of pra_list_head qeueue
+      //(2)  assign the value of *ptr_page to the addr of this page
++     list_entry_t* victim_le = head->prev;
++     assert(head != victim_le);
++     list_del(victim_le);
++     struct Page* p = le2page(victim_le, pra_page_link);
++     assert(p != NULL);
++     *ptr_page = p;
+      return 0;
+ }
+ 
+diff -r -u -P lab3/kern/mm/vmm.c lab3_master/kern/mm/vmm.c
+--- lab3/kern/mm/vmm.c	2018-10-16 09:47:34.448901101 +0800
++++ lab3_master/kern/mm/vmm.c	2018-10-16 09:47:17.415581330 +0800
+@@ -396,6 +396,32 @@
+         }
+    }
+ #endif
++    if ((ptep = get_pte(mm->pgdir, addr, 1)) == NULL) {
++        cprintf("get_pte in do_pgfault failed\n");
++        goto failed;
++    }
++    if (*ptep == 0) { // if the phy addr isn't exist, then alloc a page & map the phy addr with logical addr
++        if (pgdir_alloc_page(mm->pgdir, addr, perm) == NULL) {
++            cprintf("pgdir_alloc_page in do_pgfault failed\n");
++            goto failed;
++        }
++    } else { // if this pte is a swap entry, then load data from disk to a page with phy addr
++           // and call page_insert to map the phy addr with logical addr
++        if(swap_init_ok) {
++            struct Page *page=NULL;
++            if ((ret = swap_in(mm, addr, &page)) != 0) {
++                cprintf("swap_in in do_pgfault failed\n");
++                goto failed;
++            }
++            page_insert(mm->pgdir, page, addr, perm);
++            swap_map_swappable(mm, addr, page, 1);
++            page->pra_vaddr = addr;
++        }
++        else {
++            cprintf("no swap_init_ok but ptep is %x, failed\n",*ptep);
++            goto failed;
++        }
++   }
+    ret = 0;
+ failed:
+     return ret;
+diff -r -u -P lab3/kern/trap/trap.c lab3_master/kern/trap/trap.c
+--- lab3/kern/trap/trap.c	2018-10-16 09:47:34.448901101 +0800
++++ lab3_master/kern/trap/trap.c	2018-10-16 09:47:17.415581330 +0800
+@@ -48,6 +48,19 @@
+       *     You don't know the meaning of this instruction? just google it! and check the libs/x86.h to know more.
+       *     Notice: the argument of lidt is idt_pd. try to find it!
+       */
++    extern uintptr_t __vectors[];
++    int i;
++    for (i = 0; i < sizeof(idt) / sizeof(struct gatedesc); i ++) {
++        SETGATE(idt[i], 0, GD_KTEXT, __vectors[i], DPL_KERNEL);
++    }
++	// set for switch from user to kernel
++    SETGATE(idt[T_SWITCH_TOK], 0, GD_KTEXT, __vectors[T_SWITCH_TOK], DPL_USER);
++	// load the IDT
++    struct pseudodesc idt_pd = {
++        .pd_lim = sizeof(idt) - 1,
++        .pd_base = (uintptr_t)idt
++    };
++    lidt(&idt_pd);
+ }
+ 
+ static const char *
+@@ -162,6 +175,8 @@
+ static volatile int in_swap_tick_event = 0;
+ extern struct mm_struct *check_mm_struct;
+ 
++static struct trapframe switchk2u, *switchu2k;
++/* trap_dispatch - dispatch based on what type of trap occurred */
+ static void
+ trap_dispatch(struct trapframe *tf) {
+     char c;
+@@ -186,6 +201,10 @@
+          * (2) Every TICK_NUM cycle, you can print some info using a funciton, such as print_ticks().
+          * (3) Too Simple? Yes, I think so!
+          */
++        ticks ++;
++        if (ticks % TICK_NUM == 0) {
++            print_ticks();
++        }
+         break;
+     case IRQ_OFFSET + IRQ_COM1:
+         c = cons_getc();
+@@ -197,8 +216,30 @@
+         break;
+     //LAB1 CHALLENGE 1 : YOUR CODE you should modify below codes.
+     case T_SWITCH_TOU:
++        if (tf->tf_cs != USER_CS) {
++            switchk2u = *tf;
++            switchk2u.tf_cs = USER_CS;
++            switchk2u.tf_ds = switchk2u.tf_es = switchk2u.tf_ss = USER_DS;
++            switchk2u.tf_esp = (uint32_t)tf + sizeof(struct trapframe) - 8;
++
++            // set eflags, make sure ucore can use io under user mode.
++            // if CPL > IOPL, then cpu will generate a general protection.
++            switchk2u.tf_eflags |= FL_IOPL_MASK;
++
++            // set temporary stack
++            // then iret will jump to the right stack
++            *((uint32_t *)tf - 1) = (uint32_t)&switchk2u;
++        }
++        break;
+     case T_SWITCH_TOK:
+-        panic("T_SWITCH_** ??\n");
++        if (tf->tf_cs != KERNEL_CS) {
++            tf->tf_cs = KERNEL_CS;
++            tf->tf_ds = tf->tf_es = KERNEL_DS;
++            tf->tf_eflags &= ~FL_IOPL_MASK;
++            switchu2k = (struct trapframe *)(tf->tf_esp - (sizeof(struct trapframe) - 8));
++            memmove(switchu2k, tf, sizeof(struct trapframe) - 8);
++            *((uint32_t *)tf - 1) = (uint32_t)switchu2k;
++        }
+         break;
+     case IRQ_OFFSET + IRQ_IDE1:
+     case IRQ_OFFSET + IRQ_IDE2:
+diff -r -u -P lab3/lab2.patch lab3_master/lab2.patch
+--- lab3/lab2.patch	1970-01-01 08:00:00.000000000 +0800
++++ lab3_master/lab2.patch	2018-10-16 09:47:17.415581330 +0800
+@@ -0,0 +1,341 @@
++diff -r -u -P lab2/kern/debug/kdebug.c lab2_master/kern/debug/kdebug.c
++--- lab2/kern/debug/kdebug.c	2018-10-15 10:32:11.850448515 +0800
+++++ lab2_master/kern/debug/kdebug.c	2018-10-15 10:32:03.714684579 +0800
++@@ -219,13 +219,13 @@
++  * */
++ void
++ print_kerninfo(void) {
++-    extern char etext[], edata[], end[], kern_init[];
+++    extern char etext[], edata[], ucore_end[], kern_init[];
++     cprintf("Special kernel symbols:\n");
++     cprintf("  entry  0x%08x (phys)\n", kern_init);
++     cprintf("  etext  0x%08x (phys)\n", etext);
++     cprintf("  edata  0x%08x (phys)\n", edata);
++-    cprintf("  end    0x%08x (phys)\n", end);
++-    cprintf("Kernel executable memory footprint: %dKB\n", (end - kern_init + 1023)/1024);
+++    cprintf("  end    0x%08x (phys)\n", ucore_end);
+++    cprintf("Kernel executable memory footprint: %dKB\n", (ucore_end - kern_init + 1023)/1024);
++ }
++ 
++ /* *
++@@ -293,6 +293,20 @@
++  * */
++ void
++ print_stackframe(void) {
+++     uint32_t ebp = read_ebp(), eip = read_eip();
+++
+++     int i, j;
+++     for (i = 0; ebp != 0 && i < STACKFRAME_DEPTH; i ++) {
+++         cprintf("ebp:0x%08x eip:0x%08x args:", ebp, eip);
+++         uint32_t *args = (uint32_t *)ebp + 2;
+++         for (j = 0; j < 4; j ++) {
+++             cprintf("0x%08x ", args[j]);
+++         }
+++         cprintf("\n");
+++         print_debuginfo(eip - 1);
+++         eip = ((uint32_t *)ebp)[1];
+++         ebp = ((uint32_t *)ebp)[0];
+++     }
++      /* LAB1 YOUR CODE : STEP 1 */
++      /* (1) call read_ebp() to get the value of ebp. the type is (uint32_t);
++       * (2) call read_eip() to get the value of eip. the type is (uint32_t);
++diff -r -u -P lab2/kern/init/init.c lab2_master/kern/init/init.c
++--- lab2/kern/init/init.c	2018-10-15 10:32:11.850448515 +0800
+++++ lab2_master/kern/init/init.c	2018-10-15 10:32:03.714684579 +0800
++@@ -16,8 +16,8 @@
++ 
++ int
++ kern_init(void) {
++-    extern char edata[], end[];
++-    memset(edata, 0, end - edata);
+++    extern char edata[], ucore_end[];
+++    memset(edata, 0, ucore_end - edata);
++ 
++     cons_init();                // init the console
++ 
++@@ -84,12 +84,22 @@
++ 
++ static void
++ lab1_switch_to_user(void) {
++-    //LAB1 CHALLENGE 1 : TODO
+++    asm volatile (
+++        "sub $0x8, %%esp \n"
+++        "int %0 \n"
+++        "movl %%ebp, %%esp"
+++        : : "i"(T_SWITCH_TOU)
+++    );
++ }
++ 
++ static void
++ lab1_switch_to_kernel(void) {
++-    //LAB1 CHALLENGE 1 :  TODO
+++    asm volatile (
+++        "int %0 \n"
+++        "movl %%ebp, %%esp \n"
+++        : 
+++        : "i"(T_SWITCH_TOK)
+++    );
++ }
++ 
++ static void
++diff -r -u -P lab2/kern/mm/default_pmm.c lab2_master/kern/mm/default_pmm.c
++--- lab2/kern/mm/default_pmm.c	2018-10-15 10:32:11.850448515 +0800
+++++ lab2_master/kern/mm/default_pmm.c	2018-10-15 10:32:03.714684579 +0800
++@@ -119,6 +119,9 @@
++     list_add(&free_list, &(base->page_link));
++ }
++ 
+++// XXX: This implememtation is only for boot time kernel before enabling paging.
+++// It doesn't check if the allocated pages are reserved.
+++// Is this right ?
++ static struct Page *
++ default_alloc_pages(size_t n) {
++     assert(n > 0);
++@@ -135,12 +138,13 @@
++         }
++     }
++     if (page != NULL) {
++-        list_del(&(page->page_link));
++         if (page->property > n) {
++             struct Page *p = page + n;
++             p->property = page->property - n;
++-            list_add(&free_list, &(p->page_link));
++-    }
+++            SetPageProperty(p);
+++            list_add_after(&(page->page_link), &(p->page_link));
+++        }
+++        list_del(&(page->page_link));
++         nr_free -= n;
++         ClearPageProperty(page);
++     }
++@@ -162,12 +166,12 @@
++     while (le != &free_list) {
++         p = le2page(le, page_link);
++         le = list_next(le);
++-        if (base + base->property == p) {
+++        if (base + base->property == p) { // delete the block after `base`
++             base->property += p->property;
++             ClearPageProperty(p);
++             list_del(&(p->page_link));
++         }
++-        else if (p + p->property == base) {
+++        else if (p + p->property == base) { // delete the block before `base`
++             p->property += base->property;
++             ClearPageProperty(base);
++             base = p;
++@@ -175,7 +179,14 @@
++         }
++     }
++     nr_free += n;
++-    list_add(&free_list, &(base->page_link));
+++    for (le = list_next(&free_list); le != &free_list; le = list_next(le)) {
+++      p = le2page(le, page_link);
+++      if (base + base->property <= p) { // find the next block of `base`
+++        assert(base + base->property != p); // There should be some block in use between `p` and `base`
+++        break;
+++      }
+++    }
+++    list_add_before(le, &(base->page_link));
++ }
++ 
++ static size_t
++diff -r -u -P lab2/kern/mm/pmm.c lab2_master/kern/mm/pmm.c
++--- lab2/kern/mm/pmm.c	2018-10-15 10:32:11.850448515 +0800
+++++ lab2_master/kern/mm/pmm.c	2018-10-15 10:32:03.714684579 +0800
++@@ -83,10 +83,6 @@
++     [SEG_TSS]   = SEG_NULL,
++ };
++ 
++-static struct pseudodesc gdt_pd = {
++-    sizeof(gdt) - 1, (uintptr_t)gdt
++-};
++-
++ static void check_alloc_page(void);
++ static void check_pgdir(void);
++ static void check_boot_pgdir(void);
++@@ -127,6 +123,11 @@
++     // initialize the TSS filed of the gdt
++     gdt[SEG_TSS] = SEGTSS(STS_T32A, (uintptr_t)&ts, sizeof(ts), DPL_KERNEL);
++ 
+++    struct pseudodesc gdt_pd = {
+++        .pd_lim = sizeof(gdt) - 1,
+++        .pd_base = (uintptr_t)gdt
+++    };
+++
++     // reload all segment registers
++     lgdt(&gdt_pd);
++ 
++@@ -208,16 +209,25 @@
++         maxpa = KMEMSIZE;
++     }
++ 
++-    extern char end[];
+++    extern char ucore_end[]; // bootloader加载ucore的结束地址
++ 
++     npage = maxpa / PGSIZE;
++-    pages = (struct Page *)ROUNDUP((void *)end, PGSIZE);
+++    pages = (struct Page *)ROUNDUP((void *)ucore_end, PGSIZE);
++ 
++     for (i = 0; i < npage; i ++) {
++         SetPageReserved(pages + i);
++     }
++ 
+++    // XXX: Why is `freemem` < `pages` when break at the next line (for loop) ?
+++    // `p/x freemem` in gdb : 0xc0008000
+++    // `p/x pages`          : 0xc011c000
+++    // `p/x (uintptr_t)pages + sizeof(struct Page) * npage`
+++    //                      : 0xc01bbd80
+++    // `p npage`            : 32736
++     uintptr_t freemem = PADDR((uintptr_t)pages + sizeof(struct Page) * npage);
+++    /*static_assert(freemem == 0x1bbd80);*/
+++    /*uintptr_t freemem = PADDR(0xc01bbd80);*/
+++    /*uintptr_t freemem = 0x1bbd80;*/
++ 
++     for (i = 0; i < memmap->nr_map; i ++) {
++         uint64_t begin = memmap->map[i].addr, end = begin + memmap->map[i].size;
++@@ -297,6 +307,7 @@
++ 
++     // recursively insert boot_pgdir in itself
++     // to form a virtual page table at virtual address VPT
+++    // In this lab, recursive page directory is used only for `print_pgdir()`
++     boot_pgdir[PDX(VPT)] = PADDR(boot_pgdir) | PTE_P | PTE_W;
++ 
++     // map all physical memory to linear memory with base linear addr KERNBASE
++@@ -359,6 +370,19 @@
++     }
++     return NULL;          // (8) return page table entry
++ #endif
+++    pde_t *pdep = &pgdir[PDX(la)];
+++    if (!(*pdep & PTE_P)) {
+++      struct Page* page;
+++      if (!create || (page = alloc_page()) == NULL) {
+++        return NULL;
+++      }
+++      set_page_ref(page, 1);
+++      uintptr_t pa = page2pa(page); // physical address of secondary page table
+++      memset(KADDR(pa), 0, PGSIZE); // MUST memset to 0 because every entry here
+++                                    // is a new PTE mapping to nothing.
+++      *pdep = pa | PTE_P | PTE_W | PTE_U;
+++    }
+++    return &((pte_t*) KADDR(PDE_ADDR(*pdep)))[PTX(la)];
++ }
++ 
++ //get_page - get related Page struct for linear address la using PDT pgdir
++@@ -404,6 +428,19 @@
++                                   //(6) flush tlb
++     }
++ #endif
+++    if (*ptep & PTE_P) {
+++      struct Page* page = pte2page(*ptep);
+++      page_ref_dec(page);
+++      if (page->ref == 0) {
+++        free_page(page);
+++        // must NOT invalidate TLB only here. If one process free page, it
+++        // should not see it any more. Since `*ptep` is cleared, TLB must
+++        // refresh.
+++      }
+++      tlb_invalidate(pgdir, la);
+++      *ptep = 0;
+++      // *ptep &= ~PTE_P;
+++    }
++ }
++ 
++ //page_remove - free an Page which is related linear address la and has an validated pte
++diff -r -u -P lab2/kern/trap/trap.c lab2_master/kern/trap/trap.c
++--- lab2/kern/trap/trap.c	2018-10-15 10:32:11.850448515 +0800
+++++ lab2_master/kern/trap/trap.c	2018-10-15 10:32:03.714684579 +0800
++@@ -46,6 +46,19 @@
++       *     You don't know the meaning of this instruction? just google it! and check the libs/x86.h to know more.
++       *     Notice: the argument of lidt is idt_pd. try to find it!
++       */
+++    extern uintptr_t __vectors[];
+++    int i;
+++    for (i = 0; i < sizeof(idt) / sizeof(struct gatedesc); i ++) {
+++        SETGATE(idt[i], 0, GD_KTEXT, __vectors[i], DPL_KERNEL);
+++    }
+++	// set for switch from user to kernel
+++    SETGATE(idt[T_SWITCH_TOK], 0, GD_KTEXT, __vectors[T_SWITCH_TOK], DPL_USER);
+++	// load the IDT
+++    struct pseudodesc idt_pd = {
+++        .pd_lim = sizeof(idt) - 1,
+++        .pd_base = (uintptr_t)idt
+++    };
+++    lidt(&idt_pd);
++ }
++ 
++ static const char *
++@@ -134,6 +147,7 @@
++     cprintf("  eax  0x%08x\n", regs->reg_eax);
++ }
++ 
+++static struct trapframe switchk2u, *switchu2k;
++ /* trap_dispatch - dispatch based on what type of trap occurred */
++ static void
++ trap_dispatch(struct trapframe *tf) {
++@@ -147,6 +161,10 @@
++          * (2) Every TICK_NUM cycle, you can print some info using a funciton, such as print_ticks().
++          * (3) Too Simple? Yes, I think so!
++          */
+++        ticks ++;
+++        if (ticks % TICK_NUM == 0) {
+++            print_ticks();
+++        }
++         break;
++     case IRQ_OFFSET + IRQ_COM1:
++         c = cons_getc();
++@@ -158,8 +176,30 @@
++         break;
++     //LAB1 CHALLENGE 1 : YOUR CODE you should modify below codes.
++     case T_SWITCH_TOU:
+++        if (tf->tf_cs != USER_CS) {
+++            switchk2u = *tf;
+++            switchk2u.tf_cs = USER_CS;
+++            switchk2u.tf_ds = switchk2u.tf_es = switchk2u.tf_ss = USER_DS;
+++            switchk2u.tf_esp = (uint32_t)tf + sizeof(struct trapframe) - 8;
+++
+++            // set eflags, make sure ucore can use io under user mode.
+++            // if CPL > IOPL, then cpu will generate a general protection.
+++            switchk2u.tf_eflags |= FL_IOPL_MASK;
+++
+++            // set temporary stack
+++            // then iret will jump to the right stack
+++            *((uint32_t *)tf - 1) = (uint32_t)&switchk2u;
+++        }
+++        break;
++     case T_SWITCH_TOK:
++-        panic("T_SWITCH_** ??\n");
+++        if (tf->tf_cs != KERNEL_CS) {
+++            tf->tf_cs = KERNEL_CS;
+++            tf->tf_ds = tf->tf_es = KERNEL_DS;
+++            tf->tf_eflags &= ~FL_IOPL_MASK;
+++            switchu2k = (struct trapframe *)(tf->tf_esp - (sizeof(struct trapframe) - 8));
+++            memmove(switchu2k, tf, sizeof(struct trapframe) - 8);
+++            *((uint32_t *)tf - 1) = (uint32_t)switchu2k;
+++        }
++         break;
++     case IRQ_OFFSET + IRQ_IDE1:
++     case IRQ_OFFSET + IRQ_IDE2:
++diff -r -u -P lab2/Makefile lab2_master/Makefile
++--- lab2/Makefile	2018-10-15 10:32:11.850448515 +0800
+++++ lab2_master/Makefile	2018-10-15 10:32:03.714684579 +0800
++@@ -228,7 +228,7 @@
++ 
++ .DEFAULT_GOAL := TARGETS
++ 
++-QEMUOPTS = -hda $(UCOREIMG)
+++QEMUOPTS = -drive format=raw,file=$(UCOREIMG)
++ 
++ .PHONY: qemu qemu-nox debug debug-nox
++ qemu-mon: $(UCOREIMG)
++diff -r -u -P lab2/tools/kernel.ld lab2_master/tools/kernel.ld
++--- lab2/tools/kernel.ld	2018-10-15 10:32:11.850448515 +0800
+++++ lab2_master/tools/kernel.ld	2018-10-15 10:32:03.718684463 +0800
++@@ -55,7 +55,7 @@
++         *(.bss)
++     }
++ 
++-    PROVIDE(end = .);
+++    PROVIDE(ucore_end = .);
++ 
++     /DISCARD/ : {
++         *(.eh_frame .note.GNU-stack)
+diff -r -u -P lab3/Makefile lab3_master/Makefile
+--- lab3/Makefile	2018-10-16 09:47:34.448901101 +0800
++++ lab3_master/Makefile	2018-10-16 09:47:17.407581214 +0800
+@@ -238,12 +238,12 @@
+ debug: $(UCOREIMG) $(SWAPIMG)
+ 	$(V)$(QEMU) -S -s -parallel stdio $(QEMUOPTS) -serial null &
+ 	$(V)sleep 2
+-	$(V)$(TERMINAL) -e "$(GDB) -q -x tools/gdbinit"
++	#$(V)$(TERMINAL) -e "$(GDB) -q -x tools/gdbinit"
+ 
+ debug-nox: $(UCOREIMG) $(SWAPIMG)
+ 	$(V)$(QEMU) -S -s -serial mon:stdio $(QEMUOPTS) -nographic &
+ 	$(V)sleep 2
+-	$(V)$(TERMINAL) -e "$(GDB) -q -x tools/gdbinit"
++	#$(V)$(TERMINAL) -e "$(GDB) -q -x tools/gdbinit"
+ 
+ .PHONY: grade touch
+ 
+diff -r -u -P lab3/tools/kernel.ld lab3_master/tools/kernel.ld
+--- lab3/tools/kernel.ld	2018-10-16 09:47:34.448901101 +0800
++++ lab3_master/tools/kernel.ld	2018-10-16 09:47:17.719585754 +0800
+@@ -55,7 +55,7 @@
+         *(.bss)
+     }
+ 
+-    PROVIDE(end = .);
++    PROVIDE(ucore_end = .);
+ 
+     /DISCARD/ : {
+         *(.eh_frame .note.GNU-stack)

@@ -166,25 +166,15 @@ void
 proc_run(struct proc_struct *proc) {
     if (proc != current) {
         bool intr_flag;
-        /*struct proc_struct *prev = current, *next = proc;*/
+        struct proc_struct *prev = current, *next = proc;
         local_intr_save(intr_flag); // Disable interrupt if enabled
         {
             current = proc;
-            load_esp0(proc->kstack + KSTACKSIZE);
-            lcr3(proc->cr3);
-            switch_to(&(current->context), &(proc->context));
+            load_esp0(next->kstack + KSTACKSIZE);
+            lcr3(next->cr3);
+            switch_to(&(prev->context), &(next->context));
         }
         local_intr_restore(intr_flag);
-        // XXX: Why rename current and proc here?
-        /*struct proc_struct *prev = current, *next = proc;*/
-        /*local_intr_save(intr_flag); // Disable interrupt if enabled*/
-        /*{*/
-            /*current = proc;*/
-            /*load_esp0(next->kstack + KSTACKSIZE);*/
-            /*lcr3(next->cr3);*/
-            /*switch_to(&(prev->context), &(next->context));*/
-        /*}*/
-        /*local_intr_restore(intr_flag);*/
     }
 }
 
@@ -264,9 +254,10 @@ static void
 copy_thread(struct proc_struct *proc, uintptr_t esp, struct trapframe *tf) {
     proc->tf = (struct trapframe *)(proc->kstack + KSTACKSIZE) - 1;
     *(proc->tf) = *tf;
-    proc->tf->tf_regs.reg_eax = 0;
+    proc->tf->tf_regs.reg_eax = 0;// `fork()` returns 0 for child process
     proc->tf->tf_esp = esp;
-    proc->tf->tf_eflags |= FL_IF;
+    proc->tf->tf_eflags |= FL_IF; // `iret` in `__trapret` enables the interrupt
+                                  // disabled by `proc_run`'s `local_intr_save`.
 
     proc->context.eip = (uintptr_t)forkret;
     proc->context.esp = (uintptr_t)(proc->tf);

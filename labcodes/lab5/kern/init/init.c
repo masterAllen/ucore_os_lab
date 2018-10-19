@@ -20,8 +20,8 @@ static void lab1_switch_test(void);
 
 int
 kern_init(void) {
-    extern char edata[], ucore_end[];
-    memset(edata, 0, ucore_end - edata);
+    extern char edata[], end[];
+    memset(edata, 0, end - edata);
 
     cons_init();                // init the console
 
@@ -93,22 +93,12 @@ lab1_print_cur_status(void) {
 
 static void
 lab1_switch_to_user(void) {
-    asm volatile (
-        "sub $0x8, %%esp \n"
-        "int %0 \n"
-        "movl %%ebp, %%esp"
-        : : "i"(T_SWITCH_TOU)
-    );
+    //LAB1 CHALLENGE 1 : TODO
 }
 
 static void
 lab1_switch_to_kernel(void) {
-    asm volatile (
-        "int %0 \n"
-        "movl %%ebp, %%esp \n"
-        : 
-        : "i"(T_SWITCH_TOK)
-    );
+    //LAB1 CHALLENGE 1 :  TODO
 }
 
 static void

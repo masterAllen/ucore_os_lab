@@ -109,7 +109,6 @@ swap_out(struct mm_struct *mm, int n, int in_tick)
           }
           else {
                     cprintf("swap_out: i %d, store page in vaddr 0x%x to disk swap entry %d\n", i, v, page->pra_vaddr/PGSIZE+1);
-                    /*cprintf("page physical address: %d\n", page2pte(page));*/
                     *ptep = (page->pra_vaddr/PGSIZE+1)<<8;
                     free_page(page);
           }

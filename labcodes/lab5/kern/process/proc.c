@@ -197,25 +197,15 @@ void
 proc_run(struct proc_struct *proc) {
     if (proc != current) {
         bool intr_flag;
-        /*struct proc_struct *prev = current, *next = proc;*/
-        local_intr_save(intr_flag); // Disable interrupt if enabled
+        struct proc_struct *prev = current, *next = proc;
+        local_intr_save(intr_flag);
         {
             current = proc;
-            load_esp0(proc->kstack + KSTACKSIZE);
-            lcr3(proc->cr3);
-            switch_to(&(current->context), &(proc->context));
+            load_esp0(next->kstack + KSTACKSIZE);
+            lcr3(next->cr3);
+            switch_to(&(prev->context), &(next->context));
         }
         local_intr_restore(intr_flag);
-        // XXX: Why rename current and proc here?
-        /*struct proc_struct *prev = current, *next = proc;*/
-        /*local_intr_save(intr_flag); // Disable interrupt if enabled*/
-        /*{*/
-            /*current = proc;*/
-            /*load_esp0(next->kstack + KSTACKSIZE);*/
-            /*lcr3(next->cr3);*/
-            /*switch_to(&(prev->context), &(next->context));*/
-        /*}*/
-        /*local_intr_restore(intr_flag);*/
     }
 }
 

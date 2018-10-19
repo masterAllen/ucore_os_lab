@@ -34,10 +34,6 @@ static void print_ticks() {
  * */
 static struct gatedesc idt[256] = {{0}};
 
-static struct pseudodesc idt_pd = {
-    sizeof(idt) - 1, (uintptr_t)idt
-};
-
 /* idt_init - initialize IDT to each of the entry points in kern/trap/vectors.S */
 void
 idt_init(void) {
@@ -53,6 +49,21 @@ idt_init(void) {
       *     You don't know the meaning of this instruction? just google it! and check the libs/x86.h to know more.
       *     Notice: the argument of lidt is idt_pd. try to find it!
       */
+    extern uintptr_t __vectors[];
+    int i;
+    for (i = 0; i < sizeof(idt) / sizeof(struct gatedesc); i ++) {
+        SETGATE(idt[i], 0, GD_KTEXT, __vectors[i], DPL_KERNEL);
+    }
+    // set for switch from user to kernel
+    SETGATE(idt[T_SWITCH_TOK], 0, GD_KTEXT, __vectors[T_SWITCH_TOK], DPL_USER);
+    // set syscall
+    SETGATE(idt[T_SYSCALL], 1, GD_KTEXT, __vectors[T_SYSCALL], DPL_USER);
+    // load the IDT
+    struct pseudodesc idt_pd = {
+        .pd_lim = sizeof(idt) - 1,
+        .pd_base = (uintptr_t)idt
+    };
+    lidt(&idt_pd);
      /* LAB5 YOUR CODE */ 
      //you should update your lab1 code (just add ONE or TWO lines of code), let user app to use syscall to get the service of ucore
      //so you should setup the syscall interrupt gate in here
@@ -182,6 +193,8 @@ pgfault_handler(struct trapframe *tf) {
 static volatile int in_swap_tick_event = 0;
 extern struct mm_struct *check_mm_struct;
 
+static struct trapframe switchk2u, *switchu2k;
+/* trap_dispatch - dispatch based on what type of trap occurred */
 static void
 trap_dispatch(struct trapframe *tf) {
     char c;
@@ -219,11 +232,15 @@ trap_dispatch(struct trapframe *tf) {
          * (2) Every TICK_NUM cycle, you can print some info using a funciton, such as print_ticks().
          * (3) Too Simple? Yes, I think so!
          */
+        ticks ++;
+        if (ticks % TICK_NUM == 0) {
+            print_ticks();
+            current->need_resched = 1;
+        }
         /* LAB5 YOUR CODE */
         /* you should upate you lab1 code (just add ONE or TWO lines of code):
          *    Every TICK_NUM cycle, you should set current process's current->need_resched = 1
          */
-  
         break;
     case IRQ_OFFSET + IRQ_COM1:
         c = cons_getc();
@@ -235,8 +252,30 @@ trap_dispatch(struct trapframe *tf) {
         break;
     //LAB1 CHALLENGE 1 : YOUR CODE you should modify below codes.
     case T_SWITCH_TOU:
+        if (tf->tf_cs != USER_CS) {
+            switchk2u = *tf;
+            switchk2u.tf_cs = USER_CS;
+            switchk2u.tf_ds = switchk2u.tf_es = switchk2u.tf_ss = USER_DS;
+            switchk2u.tf_esp = (uint32_t)tf + sizeof(struct trapframe) - 8;
+
+            // set eflags, make sure ucore can use io under user mode.
+            // if CPL > IOPL, then cpu will generate a general protection.
+            switchk2u.tf_eflags |= FL_IOPL_MASK;
+
+            // set temporary stack
+            // then iret will jump to the right stack
+            *((uint32_t *)tf - 1) = (uint32_t)&switchk2u;
+        }
+        break;
     case T_SWITCH_TOK:
-        panic("T_SWITCH_** ??\n");
+        if (tf->tf_cs != KERNEL_CS) {
+            tf->tf_cs = KERNEL_CS;
+            tf->tf_ds = tf->tf_es = KERNEL_DS;
+            tf->tf_eflags &= ~FL_IOPL_MASK;
+            switchu2k = (struct trapframe *)(tf->tf_esp - (sizeof(struct trapframe) - 8));
+            memmove(switchu2k, tf, sizeof(struct trapframe) - 8);
+            *((uint32_t *)tf - 1) = (uint32_t)switchu2k;
+        }
         break;
     case IRQ_OFFSET + IRQ_IDE1:
     case IRQ_OFFSET + IRQ_IDE2:

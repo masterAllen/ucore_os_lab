@@ -86,10 +86,6 @@ static struct segdesc gdt[] = {
     [SEG_TSS]   = SEG_NULL,
 };
 
-static struct pseudodesc gdt_pd = {
-    sizeof(gdt) - 1, (uintptr_t)gdt
-};
-
 static void check_alloc_page(void);
 static void check_pgdir(void);
 static void check_boot_pgdir(void);
@@ -129,6 +125,11 @@ gdt_init(void) {
 
     // initialize the TSS filed of the gdt
     gdt[SEG_TSS] = SEGTSS(STS_T32A, (uintptr_t)&ts, sizeof(ts), DPL_KERNEL);
+
+    struct pseudodesc gdt_pd = {
+        .pd_lim = sizeof(gdt) - 1,
+        .pd_base = (uintptr_t)gdt
+    };
 
     // reload all segment registers
     lgdt(&gdt_pd);
@@ -222,16 +223,25 @@ page_init(void) {
         maxpa = KMEMSIZE;
     }
 
-    extern char end[];
+    extern char ucore_end[]; // bootloader加载ucore的结束地址
 
     npage = maxpa / PGSIZE;
-    pages = (struct Page *)ROUNDUP((void *)end, PGSIZE);
+    pages = (struct Page *)ROUNDUP((void *)ucore_end, PGSIZE);
 
     for (i = 0; i < npage; i ++) {
         SetPageReserved(pages + i);
     }
 
+    // XXX: Why is `freemem` < `pages` when break at the next line (for loop) ?
+    // `p/x freemem` in gdb : 0xc0008000
+    // `p/x pages`          : 0xc011c000
+    // `p/x (uintptr_t)pages + sizeof(struct Page) * npage`
+    //                      : 0xc01bbd80
+    // `p npage`            : 32736
     uintptr_t freemem = PADDR((uintptr_t)pages + sizeof(struct Page) * npage);
+    /*static_assert(freemem == 0x1bbd80);*/
+    /*uintptr_t freemem = PADDR(0xc01bbd80);*/
+    /*uintptr_t freemem = 0x1bbd80;*/
 
     for (i = 0; i < memmap->nr_map; i ++) {
         uint64_t begin = memmap->map[i].addr, end = begin + memmap->map[i].size;
@@ -311,6 +321,7 @@ pmm_init(void) {
 
     // recursively insert boot_pgdir in itself
     // to form a virtual page table at virtual address VPT
+    // In this lab, recursive page directory is used only for `print_pgdir()`
     boot_pgdir[PDX(VPT)] = PADDR(boot_pgdir) | PTE_P | PTE_W;
 
     // map all physical memory to linear memory with base linear addr KERNBASE
@@ -375,6 +386,19 @@ get_pte(pde_t *pgdir, uintptr_t la, bool create) {
     }
     return NULL;          // (8) return page table entry
 #endif
+    pde_t *pdep = &pgdir[PDX(la)];
+    if (!(*pdep & PTE_P)) {
+      struct Page* page;
+      if (!create || (page = alloc_page()) == NULL) {
+        return NULL;
+      }
+      set_page_ref(page, 1);
+      uintptr_t pa = page2pa(page); // physical address of secondary page table
+      memset(KADDR(pa), 0, PGSIZE); // MUST memset to 0 because every entry here
+                                    // is a new PTE mapping to nothing.
+      *pdep = pa | PTE_P | PTE_W | PTE_U;
+    }
+    return &((pte_t*) KADDR(PDE_ADDR(*pdep)))[PTX(la)];
 }
 
 //get_page - get related Page struct for linear address la using PDT pgdir
@@ -420,6 +444,19 @@ page_remove_pte(pde_t *pgdir, uintptr_t la, pte_t *ptep) {
                                   //(6) flush tlb
     }
 #endif
+    if (*ptep & PTE_P) {
+      struct Page* page = pte2page(*ptep);
+      page_ref_dec(page);
+      if (page->ref == 0) {
+        free_page(page);
+        // must NOT invalidate TLB only here. If one process free page, it
+        // should not see it any more. Since `*ptep` is cleared, TLB must
+        // refresh.
+      }
+      tlb_invalidate(pgdir, la);
+      *ptep = 0;
+      // *ptep &= ~PTE_P;
+    }
 }
 
 void

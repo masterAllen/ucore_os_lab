@@ -55,8 +55,8 @@ idt_init(void) {
         SETGATE(idt[i], 0, GD_KTEXT, __vectors[i], DPL_KERNEL);
     }
     // set for switch from user to kernel
-    SETGATE(idt[T_SWITCH_TOK], 0, GD_KTEXT, __vectors[T_SWITCH_TOK], DPL_USER);
-    // set syscall
+    // disable this entry so that user cannot switch to kernel unless syscall
+    // SETGATE(idt[T_SWITCH_TOK], 0, GD_KTEXT, __vectors[T_SWITCH_TOK], DPL_USER);
     SETGATE(idt[T_SYSCALL], 1, GD_KTEXT, __vectors[T_SYSCALL], DPL_USER);
     // load the IDT
     struct pseudodesc idt_pd = {
@@ -91,7 +91,8 @@ trapname(int trapno) {
         "x87 FPU Floating-Point Error",
         "Alignment Check",
         "Machine-Check",
-        "SIMD Floating-Point Exception"
+        "SIMD Floating-Point Exception",
+        [0x80] "syscall: "
     };
 
     if (trapno < sizeof(excnames)/sizeof(const char * const)) {
@@ -115,6 +116,23 @@ static const char *IA32flags[] = {
     "RF", "VM", "AC", "VIF", "VIP", "ID", NULL, NULL,
 };
 
+char* syscall_name(int number, int trapno) {
+    if (trapno == 0x80) {
+        switch (number) {
+            case SYS_exit   : return "sys_exit";
+            case SYS_fork   : return "sys_fork";
+            case SYS_wait   : return "sys_wait";
+            case SYS_exec   : return "sys_exec";
+            case SYS_yield  : return "sys_yield";
+            case SYS_kill   : return "sys_kill";
+            case SYS_getpid : return "sys_getpid";
+            case SYS_putc   : return "sys_putc";
+            case SYS_pgdir  : return "sys_pgdir";
+            default         : return "unknown";
+        };
+    } else return "";
+}
+
 void
 print_trapframe(struct trapframe *tf) {
     cprintf("trapframe at %p\n", tf);
@@ -123,7 +141,8 @@ print_trapframe(struct trapframe *tf) {
     cprintf("  es   0x----%04x\n", tf->tf_es);
     cprintf("  fs   0x----%04x\n", tf->tf_fs);
     cprintf("  gs   0x----%04x\n", tf->tf_gs);
-    cprintf("  trap 0x%08x %s\n", tf->tf_trapno, trapname(tf->tf_trapno));
+    cprintf("  trap 0x%08x %s %s\n", tf->tf_trapno, trapname(tf->tf_trapno),
+            syscall_name(tf->tf_regs.reg_eax, tf->tf_trapno));
     cprintf("  err  0x%08x\n", tf->tf_err);
     cprintf("  eip  0x%08x\n", tf->tf_eip);
     cprintf("  cs   0x----%04x\n", tf->tf_cs);
@@ -219,6 +238,10 @@ trap_dispatch(struct trapframe *tf) {
         }
         break;
     case T_SYSCALL:
+        /*if (tf->tf_eflags & FL_IOPL_MASK) { */
+            /*cprintf("user syscall!\n");*/
+            /*print_trapframe(tf);*/
+        /*}*/
         syscall();
         break;
     case IRQ_OFFSET + IRQ_TIMER:

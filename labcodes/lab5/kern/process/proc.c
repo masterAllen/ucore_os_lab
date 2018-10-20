@@ -404,7 +404,10 @@ do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf) {
     if ((proc = alloc_proc()) == NULL) {
       goto fork_out;
     }
+
+    assert(current->wait_state == 0); // XXX: why must not interrupted ?
     proc->parent = current;
+
     if (setup_kstack(proc) != 0) {
       goto bad_fork_cleanup_proc;
     }
@@ -418,8 +421,7 @@ do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf) {
     {
       proc->pid = get_pid();
       hash_proc(proc);
-      list_add(&proc_list, &(proc->list_link));
-      nr_process++;
+      set_links(proc);
     }
     local_intr_restore(intr_flag);
 
@@ -456,7 +458,7 @@ do_exit(int error_code) {
     if (current == initproc) {
         panic("initproc exit.\n");
     }
-    
+
     struct mm_struct *mm = current->mm;
     if (mm != NULL) {
         lcr3(boot_cr3);
@@ -469,7 +471,7 @@ do_exit(int error_code) {
     }
     current->state = PROC_ZOMBIE;
     current->exit_code = error_code;
-    
+
     bool intr_flag;
     struct proc_struct *proc;
     local_intr_save(intr_flag);
@@ -481,7 +483,7 @@ do_exit(int error_code) {
         while (current->cptr != NULL) {
             proc = current->cptr;
             current->cptr = proc->optr;
-    
+
             proc->yptr = NULL;
             if ((proc->optr = initproc->cptr) != NULL) {
                 initproc->cptr->yptr = proc;
@@ -496,7 +498,7 @@ do_exit(int error_code) {
         }
     }
     local_intr_restore(intr_flag);
-    
+
     schedule();
     panic("do_exit will not return!! %d.\n", current->pid);
 }
@@ -604,6 +606,7 @@ load_icode(unsigned char *binary, size_t size) {
             start += size;
         }
     }
+
     //(4) build user stack memory
     vm_flags = VM_READ | VM_WRITE | VM_STACK;
     if ((ret = mm_map(mm, USTACKTOP - USTACKSIZE, USTACKSIZE, vm_flags, NULL)) != 0) {
@@ -613,7 +616,7 @@ load_icode(unsigned char *binary, size_t size) {
     assert(pgdir_alloc_page(mm->pgdir, USTACKTOP-2*PGSIZE , PTE_USER) != NULL);
     assert(pgdir_alloc_page(mm->pgdir, USTACKTOP-3*PGSIZE , PTE_USER) != NULL);
     assert(pgdir_alloc_page(mm->pgdir, USTACKTOP-4*PGSIZE , PTE_USER) != NULL);
-    
+
     //(5) set current process's mm, sr3, and set CR3 reg = physical addr of Page Directory
     mm_count_inc(mm);
     current->mm = mm;
@@ -632,6 +635,13 @@ load_icode(unsigned char *binary, size_t size) {
      *          tf_eip should be the entry point of this binary program (elf->e_entry)
      *          tf_eflags should be set to enable computer to produce Interrupt
      */
+    tf->tf_cs = USER_CS;
+    tf->tf_ds = tf->tf_es = tf->tf_ss = USER_DS;
+    tf->tf_esp = USTACKTOP;
+    tf->tf_eip = elf->e_entry;
+    tf->tf_eflags |= FL_IF;
+    // FIXME: Where should I degrade privilege level ?
+    tf->tf_eflags |= FL_IOPL_MASK;
     ret = 0;
 out:
     return ret;
@@ -692,6 +702,8 @@ do_yield(void) {
 // do_wait - wait one OR any children with PROC_ZOMBIE state, and free memory space of kernel stack
 //         - proc struct of this child.
 // NOTE: only after do_wait function, all resources of the child proces are free.
+// XXX: This is NOT the same as `wait` in UNIX. This function waits for all
+// children to exit while `wait` in UNIX returns pid of child and continue.
 int
 do_wait(int pid, int *code_store) {
     struct mm_struct *mm = current->mm;
@@ -702,7 +714,7 @@ do_wait(int pid, int *code_store) {
     }
 
     struct proc_struct *proc;
-    bool intr_flag, haskid;
+    bool intr_flag, haskid; // has_kid
 repeat:
     haskid = 0;
     if (pid != 0) {
@@ -728,6 +740,7 @@ repeat:
         current->wait_state = WT_CHILD;
         schedule();
         if (current->flags & PF_EXITING) {
+            panic("LAB5 should not go here.");
             do_exit(-E_KILLED);
         }
         goto repeat;
@@ -807,7 +820,8 @@ user_main(void *arg) {
 #ifdef TEST
     KERNEL_EXECVE2(TEST, TESTSTART, TESTSIZE);
 #else
-    KERNEL_EXECVE(exit);
+    /*KERNEL_EXECVE(exit);*/
+    KERNEL_EXECVE(hello);
 #endif
     panic("user_main execve failed.\n");
 }
@@ -824,6 +838,8 @@ init_main(void *arg) {
     }
 
     while (do_wait(0, NULL) == 0) {
+        // LAB5 do_wait won't return until all user processes exit
+        assert(initproc->cptr == NULL);
         schedule();
     }
 

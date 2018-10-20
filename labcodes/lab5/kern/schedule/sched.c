@@ -44,6 +44,9 @@ schedule(void) {
         }
         next->runs ++;
         if (next != current) {
+            // FIXME: Should not run exited process. But the following assertion
+            // may fail.
+            // assert(!(next->flags & PF_EXITING));
             proc_run(next);
         }
     }

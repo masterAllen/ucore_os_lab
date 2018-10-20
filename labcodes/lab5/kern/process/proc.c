@@ -740,7 +740,6 @@ repeat:
         current->wait_state = WT_CHILD;
         schedule();
         if (current->flags & PF_EXITING) {
-            panic("LAB5 should not go here.");
             do_exit(-E_KILLED);
         }
         goto repeat;
@@ -820,8 +819,7 @@ user_main(void *arg) {
 #ifdef TEST
     KERNEL_EXECVE2(TEST, TESTSTART, TESTSIZE);
 #else
-    /*KERNEL_EXECVE(exit);*/
-    KERNEL_EXECVE(hello);
+    KERNEL_EXECVE(waitkill);
 #endif
     panic("user_main execve failed.\n");
 }
@@ -838,8 +836,6 @@ init_main(void *arg) {
     }
 
     while (do_wait(0, NULL) == 0) {
-        // LAB5 do_wait won't return until all user processes exit
-        assert(initproc->cptr == NULL);
         schedule();
     }
 

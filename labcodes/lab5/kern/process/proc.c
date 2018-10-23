@@ -640,8 +640,9 @@ load_icode(unsigned char *binary, size_t size) {
     tf->tf_esp = USTACKTOP;
     tf->tf_eip = elf->e_entry;
     tf->tf_eflags |= FL_IF;
-    // FIXME: Where should I degrade privilege level ?
-    tf->tf_eflags |= FL_IOPL_MASK;
+    // privilege level is NOT controled by eflags! setting IOPL will give user
+    // access to I/O which is usually used by devices like graphic cards.
+    // tf->tf_eflags |= FL_IOPL_MASK;
     ret = 0;
 out:
     return ret;
@@ -819,7 +820,7 @@ user_main(void *arg) {
 #ifdef TEST
     KERNEL_EXECVE2(TEST, TESTSTART, TESTSIZE);
 #else
-    KERNEL_EXECVE(waitkill);
+    KERNEL_EXECVE(hello);
 #endif
     panic("user_main execve failed.\n");
 }

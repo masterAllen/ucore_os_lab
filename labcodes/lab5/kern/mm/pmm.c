@@ -396,7 +396,7 @@ get_pte(pde_t *pgdir, uintptr_t la, bool create) {
       uintptr_t pa = page2pa(page); // physical address of secondary page table
       memset(KADDR(pa), 0, PGSIZE); // MUST memset to 0 because every entry here
                                     // is a new PTE mapping to nothing.
-      *pdep = pa | PTE_P | PTE_W | PTE_U;
+      *pdep = pa | PTE_P | PTE_W | PTE_U; // control user access only by pte.
     }
     return &((pte_t*) KADDR(PDE_ADDR(*pdep)))[PTX(la)];
 }
@@ -517,11 +517,12 @@ copy_range(pde_t *to, pde_t *from, uintptr_t start, uintptr_t end, bool share) {
             if ((nptep = get_pte(to, start, 1)) == NULL) {
                 return -E_NO_MEM;
             }
-            uint32_t perm = (*ptep & PTE_USER);
+            uint32_t perm = (*ptep & PTE_USER); // Same `perm` as `from`
             //get page from ptep
             struct Page *page = pte2page(*ptep);
             // alloc a page for process B
-            struct Page *npage=alloc_page();
+            /*struct Page *npage=alloc_page();*/
+            struct Page* npage = pgdir_alloc_page(to, start, perm);
             assert(page!=NULL);
             assert(npage!=NULL);
             int ret=0;
@@ -543,8 +544,8 @@ copy_range(pde_t *to, pde_t *from, uintptr_t start, uintptr_t end, bool share) {
             /*void * kva_src = page2kva(page);*/
             /*void * kva_dst = page2kva(npage);*/
             memcpy(page2kva(npage), page2kva(page), PGSIZE);
-            ret = page_insert(to, npage, start, perm);
-            assert(ret == 0);
+            /*ret = page_insert(to, npage, start, perm);*/
+            /*assert(ret == 0);*/
         }
         start += PGSIZE;
     } while (start != 0 && start < end);
@@ -615,7 +616,7 @@ pgdir_alloc_page(pde_t *pgdir, uintptr_t la, uint32_t perm) {
                 page->pra_vaddr=la;
                 assert(page_ref(page) == 1);
                 //cprintf("get No. %d  page: pra_vaddr %x, pra_link.prev %x, pra_link_next %x in pgdir_alloc_page\n", (page-pages), page->pra_vaddr,page->pra_page_link.prev, page->pra_page_link.next);
-            } 
+            }
             else  {  //now current is existed, should fix it in the future
                 //swap_map_swappable(current->mm, la, page, 0);
                 //page->pra_vaddr=la;

@@ -21,7 +21,7 @@ static void lab1_switch_test(void);
 int
 kern_init(void) {
     extern char edata[], ucore_end[];
-    memset(edata, 0, ucore_end - edata);
+    memset(edata, 0, ucore_end - edata); // fill .bss with zero
 
     cons_init();                // init the console
 
@@ -38,10 +38,11 @@ kern_init(void) {
     idt_init();                 // init interrupt descriptor table
 
     vmm_init();                 // init virtual memory management
-    proc_init();                // init process table
-    
+
     ide_init();                 // init ide devices
     swap_init();                // init swap
+
+    proc_init();                // init process table
 
     clock_init();               // init clock interrupt
     intr_enable();              // enable irq interrupt

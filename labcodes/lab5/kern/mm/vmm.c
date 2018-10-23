@@ -201,7 +201,7 @@ dup_mmap(struct mm_struct *to, struct mm_struct *from) {
 
         insert_vma_struct(to, nvma);
 
-        bool share = 0;
+        bool share = 1;
         if (copy_range(to->pgdir, from->pgdir, vma->vm_start, vma->vm_end, share) != 0) {
             return -E_NO_MEM;
         }
@@ -419,7 +419,7 @@ do_pgfault(struct mm_struct *mm, uint32_t error_code, uintptr_t addr) {
             goto failed;
         }
     }
-    uint32_t perm = PTE_U;
+    uint32_t perm = PTE_U; // XXX: why give USER permission ?
     if (vma->vm_flags & VM_WRITE) {
         perm |= PTE_W;
     }
@@ -428,17 +428,7 @@ do_pgfault(struct mm_struct *mm, uint32_t error_code, uintptr_t addr) {
     ret = -E_NO_MEM;
 
     pte_t *ptep=NULL;
-    /*
-     * LAB5 CHALLENGE ( the implmentation Copy on Write)
-		There are 2 situlations when code comes here.
-		  1) *ptep & PTE_P == 1, it means one process try to write a readonly page. 
-		     If the vma includes this addr is writable, then we can set the page writable by rewrite the *ptep.
-		     This method could be used to implement the Copy on Write (COW) thchnology(a fast fork process method).
-		  2) *ptep & PTE_P == 0 & but *ptep!=0, it means this pte is a  swap entry.
-		     We should add the LAB3's results here.
-     */
-   }
-#endif
+
     if ((ptep = get_pte(mm->pgdir, addr, 1)) == NULL) {
         cprintf("get_pte in do_pgfault failed\n");
         goto failed;
@@ -448,22 +438,32 @@ do_pgfault(struct mm_struct *mm, uint32_t error_code, uintptr_t addr) {
             cprintf("pgdir_alloc_page in do_pgfault failed\n");
             goto failed;
         }
-    } else { // if this pte is a swap entry, then load data from disk to a page with phy addr
-           // and call page_insert to map the phy addr with logical addr
-        if(swap_init_ok) {
-            struct Page *page=NULL;
-            if ((ret = swap_in(mm, addr, &page)) != 0) {
-                cprintf("swap_in in do_pgfault failed\n");
+    } else {
+        if (error_code & 3 == 3) { // write read-only and present page
+          cprintf("COW of addr 0x%08x\n", addr);
+          *ptep |= PTE_W; // Allow further write.
+          struct Page* page = pte2page(*ptep);
+          uint32_t perm = *ptep & 7; // permission mask 0b111, set the same perm as page
+          struct Page* npage = pgdir_alloc_page(mm->pgdir, addr, perm);
+          memcpy(page2kva(npage), page2kva(page), PGSIZE);
+        } else { // if this pte is a swap entry, then load data from disk to a page with phy addr
+              // and call page_insert to map the phy addr with logical addr
+            assert((error_code & 1) == 0);
+            if(swap_init_ok) {
+                struct Page *page=NULL;
+                if ((ret = swap_in(mm, addr, &page)) != 0) {
+                    cprintf("swap_in in do_pgfault failed\n");
+                    goto failed;
+                }
+                page_insert(mm->pgdir, page, addr, perm);
+                swap_map_swappable(mm, addr, page, 1);
+                page->pra_vaddr = addr;
+            } else {
+                cprintf("no swap_init_ok but ptep is %x, failed\n",*ptep);
                 goto failed;
             }
-            page_insert(mm->pgdir, page, addr, perm);
-            swap_map_swappable(mm, addr, page, 1);
-            page->pra_vaddr = addr;
-        } else {
-            cprintf("no swap_init_ok but ptep is %x, failed\n",*ptep);
-            goto failed;
         }
-   }
+    }
    ret = 0;
 failed:
     return ret;

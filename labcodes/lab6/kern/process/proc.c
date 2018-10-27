@@ -151,6 +151,7 @@ set_links(struct proc_struct *proc) {
         proc->optr->yptr = proc;
     }
     proc->parent->cptr = proc;
+    proc->run_link.next = proc->run_link.prev = &(proc->run_link);
     nr_process ++;
 }
 

@@ -349,6 +349,7 @@ trap(struct trapframe *tf) {
         current->tf = otf;
         if (!in_kernel) {
             if (current->flags & PF_EXITING) {
+                cprintf("user process of pid %d exit\n", current->pid);
                 do_exit(-E_KILLED);
             }
             if (current->need_resched) {

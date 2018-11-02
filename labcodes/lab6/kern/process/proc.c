@@ -107,6 +107,7 @@ alloc_proc(void) {
       proc->state = PROC_UNINIT;
       proc->pid = -1;
       proc->cr3 = boot_cr3;
+      list_init(&(proc->run_link));
      //LAB5 YOUR CODE : (update LAB4 steps)
     /*
      * below fields(add in LAB5) in proc_struct need to be initialized	
@@ -151,7 +152,7 @@ set_links(struct proc_struct *proc) {
         proc->optr->yptr = proc;
     }
     proc->parent->cptr = proc;
-    proc->run_link.next = proc->run_link.prev = &(proc->run_link);
+    /*proc->run_link.next = proc->run_link.prev = &(proc->run_link);*/
     nr_process ++;
 }
 
@@ -781,6 +782,7 @@ do_kill(int pid) {
     if ((proc = find_proc(pid)) != NULL) {
         if (!(proc->flags & PF_EXITING)) {
             proc->flags |= PF_EXITING;
+            cprintf("process of pid %d kills %d\n", current->pid, pid);
             if (proc->wait_state & WT_INTERRUPTED) {
                 wakeup_proc(proc);
             }

@@ -260,6 +260,7 @@ kernel_thread(int (*fn)(void *), void *arg, uint32_t clone_flags) {
     tf.tf_regs.reg_ebx = (uint32_t)fn;
     tf.tf_regs.reg_edx = (uint32_t)arg;
     tf.tf_eip = (uint32_t)kernel_thread_entry;
+    // set CLONE_VM to share memory across kernel threads
     return do_fork(clone_flags | CLONE_VM, 0, &tf);
 }
 
@@ -354,7 +355,10 @@ copy_thread(struct proc_struct *proc, uintptr_t esp, struct trapframe *tf) {
     proc->tf = (struct trapframe *)(proc->kstack + KSTACKSIZE) - 1;
     *(proc->tf) = *tf;
     proc->tf->tf_regs.reg_eax = 0;// `fork()` returns 0 for child process
-    proc->tf->tf_esp = esp;
+    proc->tf->tf_esp = esp;       // only used when cross ring, return to user mode
+                                  // the same virtual address `esp` as parent
+                                  // after `setup_kstack()` point to different
+                                  // physical address
     proc->tf->tf_eflags |= FL_IF; // `iret` in `__trapret` enables the interrupt
                                   // disabled by `proc_run`'s `local_intr_save`.
 
@@ -364,8 +368,10 @@ copy_thread(struct proc_struct *proc, uintptr_t esp, struct trapframe *tf) {
 
 /* do_fork -     parent process for a new child process
  * @clone_flags: used to guide how to clone the child process
- * @stack:       the parent's user stack pointer. if stack==0, It means to fork a kernel thread.
+ * @stack:       the parent's user stack pointer. if stack==0, It means a kernel
+ *               thread is being forked.
  * @tf:          the trapframe info, which will be copied to child process's proc->tf
+ *               better named `parent_tf`
  */
 int
 do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf) {
@@ -376,31 +382,6 @@ do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf) {
     }
     ret = -E_NO_MEM;
     //LAB4:EXERCISE2 YOUR CODE
-    /*
-     * Some Useful MACROs, Functions and DEFINEs, you can use them in below implementation.
-     * MACROs or Functions:
-     *   alloc_proc:   create a proc struct and init fields (lab4:exercise1)
-     *   setup_kstack: alloc pages with size KSTACKPAGE as process kernel stack
-     *   copy_mm:      process "proc" duplicate OR share process "current"'s mm according clone_flags
-     *                 if clone_flags & CLONE_VM, then "share" ; else "duplicate"
-     *   copy_thread:  setup the trapframe on the  process's kernel stack top and
-     *                 setup the kernel entry point and stack of process
-     *   hash_proc:    add proc into proc hash_list
-     *   get_pid:      alloc a unique pid for process
-     *   wakeup_proc:  set proc->state = PROC_RUNNABLE
-     * VARIABLES:
-     *   proc_list:    the process set's list
-     *   nr_process:   the number of process set
-     */
-
-    //    1. call alloc_proc to allocate a proc_struct
-    //    2. call setup_kstack to allocate a kernel stack for child process
-    //    3. call copy_mm to dup OR share mm according clone_flag
-    //    4. call copy_thread to setup tf & context in proc_struct
-    //    5. insert proc_struct into hash_list && proc_list
-    //    6. call wakeup_proc to make the new child process RUNNABLE
-    //    7. set ret vaule using child proc's pid
-
     if ((proc = alloc_proc()) == NULL) {
       goto fork_out;
     }
@@ -428,14 +409,8 @@ do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf) {
     wakeup_proc(proc);
 
     ret = proc->pid;
-	//LAB5 YOUR CODE : (update LAB4 steps)
-   /* Some Functions
-    *    set_links:  set the relation links of process.  ALSO SEE: remove_links:  lean the relation links of process 
-    *    -------------------
-	*    update step 1: set child proc's parent to current process, make sure current process's wait_state is 0
-	*    update step 5: insert proc_struct into hash_list && proc_list, set the relation links of process
-    */
-	
+    //LAB5 YOUR CODE : (update LAB4 steps)
+
 fork_out:
     return ret;
 
@@ -463,8 +438,8 @@ do_exit(int error_code) {
     if (mm != NULL) {
         lcr3(boot_cr3);
         if (mm_count_dec(mm) == 0) {
-            exit_mmap(mm);
-            put_pgdir(mm);
+            exit_mmap(mm); // free pages and page tables
+            put_pgdir(mm); // free pgdir
             mm_destroy(mm);
         }
         current->mm = NULL;
@@ -622,6 +597,8 @@ load_icode(unsigned char *binary, size_t size) {
     current->mm = mm;
     current->cr3 = PADDR(mm->pgdir);
     lcr3(PADDR(mm->pgdir));
+    cprintf("user memory mapping:\n");
+    print_pgdir();
 
     //(6) setup trapframe for user environment
     struct trapframe *tf = current->tf;
@@ -773,7 +750,7 @@ do_kill(int pid) {
         if (!(proc->flags & PF_EXITING)) {
             proc->flags |= PF_EXITING;
             if (proc->wait_state & WT_INTERRUPTED) {
-                wakeup_proc(proc);
+                wakeup_proc(proc); // wakeup to let it do_exit() in trap()
             }
             return 0;
         }
@@ -820,7 +797,7 @@ user_main(void *arg) {
 #ifdef TEST
     KERNEL_EXECVE2(TEST, TESTSTART, TESTSIZE);
 #else
-    KERNEL_EXECVE(hello);
+    KERNEL_EXECVE(waitkill);
 #endif
     panic("user_main execve failed.\n");
 }

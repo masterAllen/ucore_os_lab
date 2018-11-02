@@ -166,25 +166,26 @@ mm_map(struct mm_struct *mm, uintptr_t addr, size_t len, uint32_t vm_flags,
 
     assert(mm != NULL);
 
-    int ret = -E_INVAL;
+    /*int ret = -E_INVAL;*/
 
     struct vma_struct *vma;
     if ((vma = find_vma(mm, start)) != NULL && end > vma->vm_start) {
-        goto out;
+        /*goto out;*/
+        return -E_INVAL;
     }
-    ret = -E_NO_MEM;
 
     if ((vma = vma_create(start, end, vm_flags)) == NULL) {
-        goto out;
+        /*goto out;*/
+        return -E_NO_MEM;
     }
     insert_vma_struct(mm, vma);
     if (vma_store != NULL) {
         *vma_store = vma;
     }
-    ret = 0;
-
-out:
-    return ret;
+    /*ret = 0;*/
+    return 0;
+/*out:*/
+    /*return ret;*/
 }
 
 int

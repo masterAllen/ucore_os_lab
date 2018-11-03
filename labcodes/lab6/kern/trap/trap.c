@@ -17,7 +17,7 @@
 #include <sync.h>
 #include <proc.h>
 
-#define TICK_NUM 100
+#define TICK_NUM 1
 
 static void print_ticks() {
     cprintf("%d ticks\n",TICK_NUM);
@@ -258,10 +258,10 @@ trap_dispatch(struct trapframe *tf) {
          */
         ticks ++;
         if (ticks % TICK_NUM == 0) {
-            print_ticks();
-            if (current) {
-                cprintf("tick of process %d\n", current->pid);
-            }
+            /*print_ticks();*/
+            /*if (current) {*/
+                /*cprintf("tick of process %d\n", current->pid);*/
+            /*}*/
             sched_class_proc_tick(current);
         }
         /* LAB5 YOUR CODE */

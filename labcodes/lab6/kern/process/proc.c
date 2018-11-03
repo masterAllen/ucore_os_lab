@@ -109,6 +109,9 @@ alloc_proc(void) {
       proc->cr3 = boot_cr3;
       list_init(&(proc->run_link));
       proc->lab6_priority = 1;
+      proc->lab6_stride = 0;
+      skew_heap_init(&(proc->lab6_run_pool));
+
      //LAB5 YOUR CODE : (update LAB4 steps)
     /*
      * below fields(add in LAB5) in proc_struct need to be initialized	
@@ -832,7 +835,7 @@ user_main(void *arg) {
 #ifdef TEST
     KERNEL_EXECVE2(TEST, TESTSTART, TESTSIZE);
 #else
-    KERNEL_EXECVE(waitkill);
+    KERNEL_EXECVE(priority);
 #endif
     panic("user_main execve failed.\n");
 }

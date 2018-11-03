@@ -17,14 +17,14 @@ static inline void
 sched_class_enqueue(struct proc_struct *proc) {
     if (proc != idleproc) {
         sched_class->enqueue(rq, proc);
-        cprintf("enqueue %d\n", proc->pid);
+        /*cprintf("enqueue %d\n", proc->pid);*/
     }
 }
 
 static inline void
 sched_class_dequeue(struct proc_struct *proc) {
     sched_class->dequeue(rq, proc);
-    cprintf("dequeue %d\n", proc->pid);
+    /*cprintf("dequeue %d\n", proc->pid);*/
 }
 
 static inline struct proc_struct *

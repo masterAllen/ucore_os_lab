@@ -108,6 +108,7 @@ alloc_proc(void) {
       proc->pid = -1;
       proc->cr3 = boot_cr3;
       list_init(&(proc->run_link));
+      proc->lab6_priority = 1;
      //LAB5 YOUR CODE : (update LAB4 steps)
     /*
      * below fields(add in LAB5) in proc_struct need to be initialized	

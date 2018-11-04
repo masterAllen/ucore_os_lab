@@ -19,7 +19,8 @@
  *            on some systems the signal must be the last statement executed inside the monitor.
  *            on some systems the old process will block until the monitor is available again.
  *            on some systems the new process (the one unblocked by the signal) will remain blocked until the monitor is available again.
- *   If a condition variable is signaled with nobody waiting, the signal is lost. Compare this with semaphores, in which a signal will allow a process that executes a wait in the future to no block.
+ *   If a condition variable is signaled with nobody waiting, the signal is lost.
+ *   Compare this with semaphores, in which a signal will allow a process that executes a wait in the future to no block.
  *   You should not think of a condition variable as a variable in the traditional sense.
  *     It does not have a value.
  *     Think of it as an object in the OOP sense.
@@ -74,7 +75,8 @@ typedef struct condvar{
 
 typedef struct monitor{
     semaphore_t mutex;      // the mutex lock for going into the routines in monitor, should be initialized to 1
-    semaphore_t next;       // the next semaphore is used to down the signaling proc itself, and the other OR wakeuped waiting proc should wake up the sleeped signaling proc.
+    semaphore_t next;       // the next semaphore is used to down the signaling proc itself,
+                            // and the other OR wakeuped waiting proc should wake up the sleeped signaling proc.
     int next_count;         // the number of of sleeped signaling proc
     condvar_t *cv;          // the condvars in monitor
 } monitor_t;

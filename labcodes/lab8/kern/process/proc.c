@@ -106,6 +106,15 @@ alloc_proc(void) {
      *       uint32_t flags;                             // Process flag
      *       char name[PROC_NAME_LEN + 1];               // Process name
      */
+      memset(proc, 0, sizeof(struct proc_struct));
+      proc->state = PROC_UNINIT;
+      proc->pid = -1;
+      proc->cr3 = boot_cr3;
+      list_init(&(proc->run_link));
+      proc->lab6_priority = 1;
+      proc->lab6_stride = 0;
+      skew_heap_init(&(proc->lab6_run_pool));
+
      //LAB5 YOUR CODE : (update LAB4 steps)
     /*
      * below fields(add in LAB5) in proc_struct need to be initialized	
@@ -151,6 +160,7 @@ set_links(struct proc_struct *proc) {
         proc->optr->yptr = proc;
     }
     proc->parent->cptr = proc;
+    /*proc->run_link.next = proc->run_link.prev = &(proc->run_link);*/
     nr_process ++;
 }
 
@@ -212,7 +222,7 @@ proc_run(struct proc_struct *proc) {
     if (proc != current) {
         bool intr_flag;
         struct proc_struct *prev = current, *next = proc;
-        local_intr_save(intr_flag);
+        local_intr_save(intr_flag); // Disable interrupt if enabled
         {
             current = proc;
             load_esp0(next->kstack + KSTACKSIZE);
@@ -363,9 +373,10 @@ static void
 copy_thread(struct proc_struct *proc, uintptr_t esp, struct trapframe *tf) {
     proc->tf = (struct trapframe *)(proc->kstack + KSTACKSIZE) - 1;
     *(proc->tf) = *tf;
-    proc->tf->tf_regs.reg_eax = 0;
+    proc->tf->tf_regs.reg_eax = 0;// `fork()` returns 0 for child process
     proc->tf->tf_esp = esp;
-    proc->tf->tf_eflags |= FL_IF;
+    proc->tf->tf_eflags |= FL_IF; // `iret` in `__trapret` enables the interrupt
+                                  // disabled by `proc_run`'s `local_intr_save`.
 
     proc->context.eip = (uintptr_t)forkret;
     proc->context.esp = (uintptr_t)(proc->tf);
@@ -454,6 +465,33 @@ do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf) {
     //    6. call wakeup_proc to make the new child process RUNNABLE
     //    7. set ret vaule using child proc's pid
 
+    if ((proc = alloc_proc()) == NULL) {
+      goto fork_out;
+    }
+
+    assert(current->wait_state == 0); // XXX: why must not interrupted ?
+    proc->parent = current;
+
+    if (setup_kstack(proc) != 0) {
+      goto bad_fork_cleanup_proc;
+    }
+    if (copy_mm(clone_flags, proc) != 0) {
+      goto bad_fork_cleanup_kstack;
+    }
+    copy_thread(proc, stack, tf);
+
+    bool intr_flag;
+    local_intr_save(intr_flag);
+    {
+      proc->pid = get_pid();
+      hash_proc(proc);
+      set_links(proc);
+    }
+    local_intr_restore(intr_flag);
+
+    wakeup_proc(proc);
+
+    ret = proc->pid;
 	//LAB5 YOUR CODE : (update LAB4 steps)
    /* Some Functions
     *    set_links:  set the relation links of process.  ALSO SEE: remove_links:  lean the relation links of process 
@@ -486,7 +524,7 @@ do_exit(int error_code) {
     if (current == initproc) {
         panic("initproc exit.\n");
     }
-    
+
     struct mm_struct *mm = current->mm;
     if (mm != NULL) {
         lcr3(boot_cr3);
@@ -500,7 +538,7 @@ do_exit(int error_code) {
     put_files(current); //for LAB8
     current->state = PROC_ZOMBIE;
     current->exit_code = error_code;
-    
+
     bool intr_flag;
     struct proc_struct *proc;
     local_intr_save(intr_flag);
@@ -512,7 +550,7 @@ do_exit(int error_code) {
         while (current->cptr != NULL) {
             proc = current->cptr;
             current->cptr = proc->optr;
-    
+
             proc->yptr = NULL;
             if ((proc->optr = initproc->cptr) != NULL) {
                 initproc->cptr->yptr = proc;
@@ -527,7 +565,7 @@ do_exit(int error_code) {
         }
     }
     local_intr_restore(intr_flag);
-    
+
     schedule();
     panic("do_exit will not return!! %d.\n", current->pid);
 }
@@ -683,6 +721,8 @@ do_yield(void) {
 // do_wait - wait one OR any children with PROC_ZOMBIE state, and free memory space of kernel stack
 //         - proc struct of this child.
 // NOTE: only after do_wait function, all resources of the child proces are free.
+// XXX: This is NOT the same as `wait` in UNIX. This function waits for all
+// children to exit while `wait` in UNIX returns pid of child and continue.
 int
 do_wait(int pid, int *code_store) {
     struct mm_struct *mm = current->mm;
@@ -693,7 +733,7 @@ do_wait(int pid, int *code_store) {
     }
 
     struct proc_struct *proc;
-    bool intr_flag, haskid;
+    bool intr_flag, haskid; // has_kid
 repeat:
     haskid = 0;
     if (pid != 0) {
@@ -750,6 +790,7 @@ do_kill(int pid) {
     if ((proc = find_proc(pid)) != NULL) {
         if (!(proc->flags & PF_EXITING)) {
             proc->flags |= PF_EXITING;
+            cprintf("process of pid %d kills %d\n", current->pid, pid);
             if (proc->wait_state & WT_INTERRUPTED) {
                 wakeup_proc(proc);
             }

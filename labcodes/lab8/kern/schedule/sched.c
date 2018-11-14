@@ -11,18 +11,20 @@ static list_entry_t timer_list;
 
 static struct sched_class *sched_class;
 
-static struct run_queue *rq;
+struct run_queue *rq;
 
 static inline void
 sched_class_enqueue(struct proc_struct *proc) {
     if (proc != idleproc) {
         sched_class->enqueue(rq, proc);
+        /*cprintf("enqueue %d\n", proc->pid);*/
     }
 }
 
 static inline void
 sched_class_dequeue(struct proc_struct *proc) {
     sched_class->dequeue(rq, proc);
+    /*cprintf("dequeue %d\n", proc->pid);*/
 }
 
 static inline struct proc_struct *
@@ -30,7 +32,7 @@ sched_class_pick_next(void) {
     return sched_class->pick_next(rq);
 }
 
-static void
+void
 sched_class_proc_tick(struct proc_struct *proc) {
     if (proc != idleproc) {
         sched_class->proc_tick(rq, proc);
@@ -91,8 +93,14 @@ schedule(void) {
         if (next == NULL) {
             next = idleproc;
         }
+        if (!find_proc(1)) {panic("no initproc\n");}
+        if (rq->proc_num == 0) { sched_class_enqueue(initproc); }
+        /*cprintf("next: %s, stride: %d\n", next->name, next->lab6_stride);*/
         next->runs ++;
         if (next != current) {
+            // FIXME: Should not run exited process. But the following assertion
+            // may fail.
+            // assert(!(next->flags & PF_EXITING));
             proc_run(next);
         }
     }

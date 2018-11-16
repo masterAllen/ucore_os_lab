@@ -114,7 +114,6 @@ alloc_proc(void) {
       proc->lab6_priority = 1;
       proc->lab6_stride = 0;
       skew_heap_init(&(proc->lab6_run_pool));
-
      //LAB5 YOUR CODE : (update LAB4 steps)
     /*
      * below fields(add in LAB5) in proc_struct need to be initialized	
@@ -474,6 +473,9 @@ do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf) {
 
     if (setup_kstack(proc) != 0) {
       goto bad_fork_cleanup_proc;
+    }
+    if (copy_files(clone_flags, proc) != 0) {
+      goto bad_fork_cleanup_fs;
     }
     if (copy_mm(clone_flags, proc) != 0) {
       goto bad_fork_cleanup_kstack;
